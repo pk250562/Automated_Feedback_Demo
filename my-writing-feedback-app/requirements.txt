@@ -1,0 +1,10 @@
+transformers
+torch
+gradio
+textstat
+lexicalrichness
+textblob
+matplotlib
+Pillow
+requests
+numpy
