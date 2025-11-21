@@ -15,7 +15,7 @@ import textstat
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"  # disable analytics
 
 # Public CEFR model on Hugging Face
-HF_API_URL = "https://api-inference.huggingface.co/models/pkim62/CEFR-classification-model"
+HF_API_URL = "https://router.huggingface.co/models/pkim62/CEFR-classification-model"
 
 LANGUAGETOOL_API_URL = "https://api.languagetool.org/v2/check"
 
@@ -263,3 +263,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
     warmup_cefr_model()
     app.launch(server_name="0.0.0.0", server_port=port, share=False, show_error=True)
+
