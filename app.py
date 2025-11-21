@@ -1,4 +1,4 @@
-# optimized app.py for Render free tier (HF Inference API + lightweight processing)
+# optimized app.py for Render free tier (HF Router API + lightweight processing)
 import os
 import re
 import html
@@ -14,14 +14,14 @@ import textstat
 # -------------------------------
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"  # disable analytics
 
-# Hugging Face CEFR model (router API)
+# Public CEFR model on Hugging Face Router API
 HF_API_URL = "https://router.huggingface.co/models/pkim62/CEFR-classification-model"
-HF_TOKEN = os.environ.get("HF_API_TOKEN")  # optional, if private model
+HF_TOKEN = os.environ.get("HF_TOKEN")  # put your HF token here, even for public models
 
 LANGUAGETOOL_API_URL = "https://api.languagetool.org/v2/check"
 
 # -------------------------------
-# Tiny sentiment lexicons (very small, lightweight)
+# Tiny sentiment lexicons
 # -------------------------------
 POS_WORDS = {"good","great","excellent","positive","happy","enjoy","love","nice","well","improve","success","benefit"}
 NEG_WORDS = {"bad","poor","terrible","negative","sad","hate","worse","problem","issue","difficult","hard","fail"}
@@ -66,6 +66,7 @@ def build_grammar_summary(text, matches, max_items=10):
         detailed.append(f"• Issue: {m.get('message','')}\n    Text: \"{error_text}\"\n    Suggestion(s): {replacements}")
     summary = f"Total Grammar Issues: {grammar_count}\n\n" + "\n\n".join(detailed) if detailed else "✅ No major grammar issues detected."
 
+    # highlighted html
     highlighted = ""
     last_index = 0
     for m in matches:
@@ -80,25 +81,22 @@ def build_grammar_summary(text, matches, max_items=10):
     return summary, highlighted, grammar_count
 
 # -------------------------------
-# CEFR prediction via HF Router API (requires token)
+# CEFR prediction via HF Router API
 # -------------------------------
-HF_API_URL = "https://router.huggingface.co/models/pkim62/CEFR-classification-model"
-HF_TOKEN = os.environ.get("HF_TOKEN")  # make sure to set your token in environment
-
 @lru_cache(maxsize=256)
 def predict_cefr(text):
     if not HF_TOKEN:
         print("⚠️ HF_TOKEN not set! Please set it in your environment.")
         return "N/A", 0.0, {}
 
-    payload = {"inputs": text}
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    payload = {"inputs": text}
 
     try:
         r = requests.post(HF_API_URL, headers=headers, json=payload, timeout=30)
         print("API RAW:", r.text, flush=True)
         data = r.json()
-        
+
         if isinstance(data, dict) and data.get("error"):
             print("HF API error:", data.get("error"))
             return "N/A", 0.0, {}
@@ -116,6 +114,11 @@ def predict_cefr(text):
     except Exception as e:
         print("HF Router API request failed:", e)
         return "N/A", 0.0, {}
+
+# -------------------------------
+# Clear cache BEFORE warmup
+# -------------------------------
+predict_cefr.cache_clear()
 
 # -------------------------------
 # Lightweight text metrics
@@ -208,6 +211,17 @@ def cefr_feedback_app(text):
     )
 
 # -------------------------------
+# Warmup function to reduce cold start latency
+# -------------------------------
+def warmup_cefr_model():
+    dummy_text = "This is a warm-up text to initialize the CEFR model."
+    try:
+        label, conf, _ = predict_cefr(dummy_text)
+        print(f"Warmup complete: label={label}, confidence={conf:.2f}")
+    except Exception as e:
+        print("Warmup failed:", e)
+
+# -------------------------------
 # Gradio UI
 # -------------------------------
 custom_css = """
@@ -260,27 +274,9 @@ with gr.Blocks(theme="gradio/default", css=custom_css) as app:
     )
 
 # -------------------------------
-# Warmup function
-# -------------------------------
-def warmup_cefr_model():
-    dummy_text = "This is a warm-up text to initialize the CEFR model."
-    try:
-        label, conf, _ = predict_cefr(dummy_text)
-        print(f"Warmup complete: label={label}, confidence={conf:.2f}")
-    except Exception as e:
-        print("Warmup failed:", e)
-
-# -------------------------------
 # Launch app
 # -------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
-    
-    # clear LRU cache for fresh start
-    predict_cefr.cache_clear()
-    
-    # warmup to reduce first request latency
     warmup_cefr_model()
-    
     app.launch(server_name="0.0.0.0", server_port=port, share=False, show_error=True)
-
