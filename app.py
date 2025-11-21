@@ -298,4 +298,7 @@ with gr.Blocks(theme="gradio/soft", css=custom_css) as app:
 # 🚀 Launch
 # -------------------------------
 if __name__ == "__main__":
-    app.launch(server_name="0.0.0.0", server_port=int(os.environ.get("PORT", 8080)))
+    app.launch(
+        server_name="0.0.0.0",
+        server_port=int(os.environ["PORT"])  # Use Render's assigned PORT
+    )
