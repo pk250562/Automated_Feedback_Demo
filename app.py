@@ -98,7 +98,7 @@ def predict_cefr(text):
     payload = {"inputs": text}
     try:
         r = requests.post(HF_API_URL, headers=HEADERS, json=payload, timeout=30)
-        print("API RAW:", response.text, flush=True) #debug line
+        print("API RAW:", r.text, flush=True) #debug line
         data = r.json()
         # Handle errors or model not ready
         if isinstance(data, dict) and data.get("error"):
@@ -270,6 +270,7 @@ with gr.Blocks(theme="gradio/soft", css=custom_css) as app:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
     app.launch(server_name="0.0.0.0", server_port=port, share=False, show_error=True)
+
 
 
 
