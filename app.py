@@ -14,8 +14,9 @@ import textstat
 # -------------------------------
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"  # disable analytics
 
-# Public CEFR model on Hugging Face
+# Hugging Face CEFR model (router API)
 HF_API_URL = "https://router.huggingface.co/models/pkim62/CEFR-classification-model"
+HF_TOKEN = os.environ.get("HF_API_TOKEN")  # optional, if private model
 
 LANGUAGETOOL_API_URL = "https://api.languagetool.org/v2/check"
 
@@ -65,7 +66,6 @@ def build_grammar_summary(text, matches, max_items=10):
         detailed.append(f"• Issue: {m.get('message','')}\n    Text: \"{error_text}\"\n    Suggestion(s): {replacements}")
     summary = f"Total Grammar Issues: {grammar_count}\n\n" + "\n\n".join(detailed) if detailed else "✅ No major grammar issues detected."
 
-    # highlighted html
     highlighted = ""
     last_index = 0
     for m in matches:
@@ -80,13 +80,14 @@ def build_grammar_summary(text, matches, max_items=10):
     return summary, highlighted, grammar_count
 
 # -------------------------------
-# CEFR prediction via HF Inference API
+# CEFR prediction via HF Inference API (router)
 # -------------------------------
 @lru_cache(maxsize=256)
 def predict_cefr(text):
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
     payload = {"inputs": text}
     try:
-        r = requests.post(HF_API_URL, json=payload, timeout=30)
+        r = requests.post(HF_API_URL, headers=headers, json=payload, timeout=30)
         print("API RAW:", r.text, flush=True)
         data = r.json()
         if isinstance(data, dict) and data.get("error"):
@@ -261,6 +262,11 @@ def warmup_cefr_model():
 # -------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
+    
+    # clear LRU cache for fresh start
+    predict_cefr.cache_clear()
+    
+    # warmup to reduce first request latency
     warmup_cefr_model()
+    
     app.launch(server_name="0.0.0.0", server_port=port, share=False, show_error=True)
-
