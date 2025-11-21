@@ -1,10 +1,4 @@
-transformers
-torch
-gradio
+gradio>=4.0.0
+requests>=2.28
 textstat
-lexicalrichness
-textblob
-matplotlib
 Pillow
-requests
-numpy
