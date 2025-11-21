@@ -131,7 +131,6 @@ def predict_cefr(text):
 # -------------------------------
 # Clear cache BEFORE warmup
 # -------------------------------
-predict_cefr.cache_clear()
 
 # -------------------------------
 # Lightweight text metrics
@@ -293,4 +292,5 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
     warmup_cefr_model()
     app.launch(server_name="0.0.0.0", server_port=port, share=False, show_error=True)
+
 
