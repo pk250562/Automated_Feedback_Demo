@@ -11,7 +11,6 @@ import textstat
 import gradio as gr
 import numpy as np
 from lexicalrichness import LexicalRichness
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from textblob import TextBlob
 import matplotlib.pyplot as plt
 from PIL import Image
@@ -47,13 +46,6 @@ def check_grammar_api(text):
 
 MODEL_REPO = "pkim62/CEFR-classification-model"
 HF_TOKEN = os.environ.get("HF_TOKEN")  # will set in Render
-
-tokenizer = AutoTokenizer.from_pretrained(MODEL_REPO, use_fast=False, use_auth_token=HF_TOKEN)
-cefr_model = AutoModelForSequenceClassification.from_pretrained(MODEL_REPO, use_auth_token=HF_TOKEN)
-
-cefr_model.eval()
-id2label = cefr_model.config.id2label
-
 
 # -------------------------------
 # 🔹 CEFR feedback mapping
@@ -147,15 +139,36 @@ def analyze_text(text):
 # -------------------------------
 @lru_cache(maxsize=128)
 def predict_cefr(text):
-    inputs = tokenizer(text, truncation=True, padding=True, max_length=512, return_tensors="pt").to(device)
-    with torch.no_grad():
-        logits = cefr_model(**inputs).logits
-        probs = torch.softmax(logits, dim=-1).cpu().numpy()[0]
-        pred_idx = int(np.argmax(probs))
-    label = id2label.get(pred_idx, f"Label {pred_idx}")
-    confidence = float(np.max(probs))
-    prob_dict = {id2label[i]: float(p) for i, p in enumerate(probs)}
-    return label, confidence, prob_dict
+    """
+    Predict CEFR level using Hugging Face Inference API.
+    Returns: label, confidence, probability dict
+    """
+    HF_TOKEN = os.environ["HF_TOKEN"]
+    API_URL = f"https://api-inference.huggingface.co/models/pkim62/CEFR-classification-model"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    payload = {"inputs": text}
+
+    try:
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+        data = response.json()
+
+        # Extract predicted label & scores
+        if isinstance(data, dict) and "error" in data:
+            # model not ready or error
+            return "N/A", 0.0, {}
+        
+        # HF API returns a list of dicts like [{"label": "C", "score": 0.85}, ...]
+        pred = data[0]
+        label = pred["label"]
+        confidence = float(pred["score"])
+        # Build probability dict
+        prob_dict = {d["label"]: float(d["score"]) for d in data}
+        return label, confidence, prob_dict
+
+    except Exception as e:
+        print("HF Inference API error:", e)
+        return "N/A", 0.0, {}
+
 
 # -------------------------------
 # 🧠 Interpretations
@@ -302,3 +315,4 @@ if __name__ == "__main__":
         server_name="0.0.0.0",
         server_port=int(os.environ["PORT"])  # Use Render's assigned PORT
     )
+
