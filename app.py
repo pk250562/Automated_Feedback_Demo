@@ -86,7 +86,7 @@ def build_grammar_summary(text, matches, max_items=10):
 # -------------------------------
 # CEFR prediction via HF Inference API
 # -------------------------------
-@lru_cache(maxsize=256)
+#@lru_cache(maxsize=256)
 def predict_cefr(text):
     """
     Calls HF Inference API. Returns: label (str), confidence (float), prob_dict (dict)
@@ -270,4 +270,5 @@ with gr.Blocks(theme="gradio/soft", css=custom_css) as app:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
     app.launch(server_name="0.0.0.0", server_port=port, share=False, show_error=True)
+
 
