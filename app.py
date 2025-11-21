@@ -14,13 +14,13 @@ import textstat
 # -------------------------------
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"  # disable analytics that sometimes break cloud hosts
 
-MODEL_REPO = "pkim62/CEFR-classification-model"  # your private model on HF
-HF_API_URL = "https://router.huggingface.co/api/models/pkim62/CEFR-classification-model"
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
+MODEL_REPO = "pkim62/CEFR-classification-model"
+tokenizer = AutoTokenizer.from_pretrained(MODEL_REPO, use_fast=False)
+cefr_model = AutoModelForSequenceClassification.from_pretrained(MODEL_REPO).to(device)
+cefr_model.eval()
+id2label = cefr_model.config.id2label
 
 LANGUAGETOOL_API_URL = "https://api.languagetool.org/v2/check"
-
-HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
 
 # -------------------------------
 # Tiny sentiment lexicons (very small, lightweight)
@@ -270,5 +270,6 @@ with gr.Blocks(theme="gradio/default", css=custom_css) as app:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
     app.launch(server_name="0.0.0.0", server_port=port, share=False, show_error=True)
+
 
 
