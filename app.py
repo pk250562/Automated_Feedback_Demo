@@ -224,8 +224,8 @@ textarea:focus, input:focus { outline: none !important; box-shadow: none !import
 </style>
 """
 
-with gr.Blocks(css=custom_css) as app:
-    gr.Markdown("## ✍️ Optimized Automated Writing Feedback (CEFR)")
+with gr.Blocks(theme="gradio/default", css=custom_css) as app:
+    gr.Markdown("## ✍️ Automated Writing Feedback (with CEFR Classification)")
     gr.Markdown("Paste up to 500 words. Grammar issues are highlighted with hover tooltips.")
     text_input = gr.Textbox(lines=10, placeholder="Paste your text here (max 500 words)...", label="Your Text")
     analyze_btn = gr.Button("🔍 Analyze Text")
@@ -270,3 +270,4 @@ with gr.Blocks(css=custom_css) as app:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
     app.launch(server_name="0.0.0.0", server_port=port, share=False, show_error=True)
+
