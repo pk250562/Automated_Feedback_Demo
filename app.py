@@ -80,28 +80,41 @@ def build_grammar_summary(text, matches, max_items=10):
     return summary, highlighted, grammar_count
 
 # -------------------------------
-# CEFR prediction via HF Inference API (router)
+# CEFR prediction via HF Router API (requires token)
 # -------------------------------
+HF_API_URL = "https://router.huggingface.co/models/pkim62/CEFR-classification-model"
+HF_TOKEN = os.environ.get("HF_TOKEN")  # make sure to set your token in environment
+
 @lru_cache(maxsize=256)
 def predict_cefr(text):
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
+    if not HF_TOKEN:
+        print("⚠️ HF_TOKEN not set! Please set it in your environment.")
+        return "N/A", 0.0, {}
+
     payload = {"inputs": text}
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+
     try:
         r = requests.post(HF_API_URL, headers=headers, json=payload, timeout=30)
         print("API RAW:", r.text, flush=True)
         data = r.json()
+        
         if isinstance(data, dict) and data.get("error"):
             print("HF API error:", data.get("error"))
             return "N/A", 0.0, {}
+
         if isinstance(data, list) and len(data) > 0:
-            prob_dict = {d.get("label", f"lbl_{i}"): float(d.get("score", 0.0)) for i,d in enumerate(data)}
+            prob_dict = {d.get("label", f"lbl_{i}"): float(d.get("score", 0.0)) 
+                         for i,d in enumerate(data)}
             top = max(data, key=lambda x: x.get("score",0))
             label = top.get("label","N/A")
             confidence = float(top.get("score",0.0))
             return label, confidence, prob_dict
+
         return "N/A", 0.0, {}
+
     except Exception as e:
-        print("HF Inference API request failed:", e)
+        print("HF Router API request failed:", e)
         return "N/A", 0.0, {}
 
 # -------------------------------
@@ -247,7 +260,7 @@ with gr.Blocks(theme="gradio/default", css=custom_css) as app:
     )
 
 # -------------------------------
-# Warmup function to reduce cold start latency
+# Warmup function
 # -------------------------------
 def warmup_cefr_model():
     dummy_text = "This is a warm-up text to initialize the CEFR model."
@@ -270,3 +283,4 @@ if __name__ == "__main__":
     warmup_cefr_model()
     
     app.launch(server_name="0.0.0.0", server_port=port, share=False, show_error=True)
+
