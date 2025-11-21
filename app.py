@@ -15,7 +15,7 @@ import textstat
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"  # disable analytics that sometimes break cloud hosts
 
 MODEL_REPO = "pkim62/CEFR-classification-model"  # your private model on HF
-HF_API_URL = f"https://router.huggingface.co/api/models/{MODEL_REPO}"
+HF_API_URL = f"https://api-inference.huggingface.co/models/{MODEL_REPO}"
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
 LANGUAGETOOL_API_URL = "https://api.languagetool.org/v2/check"
@@ -270,6 +270,7 @@ with gr.Blocks(theme="gradio/soft", css=custom_css) as app:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
     app.launch(server_name="0.0.0.0", server_port=port, share=False, show_error=True)
+
 
 
 
