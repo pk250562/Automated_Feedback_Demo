@@ -1,261 +1,218 @@
-# ============================================================
-# 🚀 Optimized HF Spaces Automated Writing Feedback App
-# ============================================================
-import matplotlib
-matplotlib.use("Agg")
-
+# optimized app.py for Render free tier (HF Inference API + lightweight processing)
 import os
 import re
-import torch
-import textstat
-import gradio as gr
-import numpy as np
-from lexicalrichness import LexicalRichness
-from textblob import TextBlob
-import matplotlib.pyplot as plt
-from PIL import Image
 import html
+import time
 import requests
 from functools import lru_cache
 
-# -------------------------------
-# 🔧 Device
-# -------------------------------
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+import gradio as gr
+import textstat
 
 # -------------------------------
-# 🔧 LanguageTool API
+# Environment & config
 # -------------------------------
+os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"  # disable analytics that sometimes break cloud hosts
+
+MODEL_REPO = "pkim62/CEFR-classification-model"  # your private model on HF
+HF_API_URL = f"https://api-inference.huggingface.co/models/{MODEL_REPO}"
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
 LANGUAGETOOL_API_URL = "https://api.languagetool.org/v2/check"
 
+HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
 
+# -------------------------------
+# Tiny sentiment lexicons (very small, lightweight)
+# -------------------------------
+POS_WORDS = {"good","great","excellent","positive","happy","enjoy","love","nice","well","improve","success","benefit"}
+NEG_WORDS = {"bad","poor","terrible","negative","sad","hate","worse","problem","issue","difficult","hard","fail"}
+
+def simple_sentiment(text):
+    words = re.findall(r"\w+", text.lower())
+    if not words:
+        return 0.0
+    pos = sum(1 for w in words if w in POS_WORDS)
+    neg = sum(1 for w in words if w in NEG_WORDS)
+    # score in range -1..1
+    score = (pos - neg) / max(1, len(words))
+    # scale a little for readability
+    return round(score * 5, 2)
+
+# -------------------------------
+# LanguageTool grammar check
+# -------------------------------
 def check_grammar_api(text):
     data = {"text": text, "language": "en-US"}
     try:
-        response = requests.post(LANGUAGETOOL_API_URL, data=data, timeout=10)
-        result = response.json()
-        return result.get("matches", [])
+        resp = requests.post(LANGUAGETOOL_API_URL, data=data, timeout=8)
+        j = resp.json()
+        return j.get("matches", [])
     except Exception as e:
-        print("LanguageTool API error:", e)
+        print("LanguageTool error:", e)
         return []
 
-# -------------------------------
-# 🔧 Load CEFR model once
-# -------------------------------
+def build_grammar_summary(text, matches, max_items=10):
+    grammar_count = len(matches)
+    detailed = []
+    for m in matches[:max_items]:
+        start = m.get("offset", 0)
+        length = m.get("length", 0)
+        error_text = text[start:start+length] if length>0 else ""
+        raw = m.get("replacements", [])
+        repls = []
+        for r in raw[:3]:
+            if isinstance(r, dict):
+                repls.append(r.get("value",""))
+            else:
+                repls.append(str(r))
+        replacements = ", ".join(repls) if repls else "No suggestions"
+        detailed.append(f"• Issue: {m.get('message','')}\n    Text: \"{error_text}\"\n    Suggestion(s): {replacements}")
+    summary = f"Total Grammar Issues: {grammar_count}\n\n" + "\n\n".join(detailed) if detailed else "✅ No major grammar issues detected."
+    # highlighted html
+    highlighted = ""
+    last_index = 0
+    for m in matches:
+        start = m.get("offset", 0)
+        end = start + m.get("length", 0)
+        msg = html.escape(m.get("message","")).replace("'", "&#39;").replace('"', "&quot;")
+        highlighted += html.escape(text[last_index:start])
+        if end > start:
+            highlighted += f"<span class='grammar-issue' title=\"{msg}\">{html.escape(text[start:end])}</span>"
+        last_index = end
+    highlighted += html.escape(text[last_index:])
+    return summary, highlighted, grammar_count
 
-MODEL_REPO = "pkim62/CEFR-classification-model"
-HF_TOKEN = os.environ.get("HF_TOKEN")  # will set in Render
+# -------------------------------
+# CEFR prediction via HF Inference API
+# -------------------------------
+@lru_cache(maxsize=256)
+def predict_cefr(text):
+    """
+    Calls HF Inference API. Returns: label (str), confidence (float), prob_dict (dict)
+    Cached to avoid repeated network calls for identical inputs.
+    """
+    if not HF_TOKEN:
+        return "N/A", 0.0, {}
+
+    payload = {"inputs": text}
+    try:
+        r = requests.post(HF_API_URL, headers=HEADERS, json=payload, timeout=30)
+        data = r.json()
+        # Handle errors or model not ready
+        if isinstance(data, dict) and data.get("error"):
+            print("HF API error:", data.get("error"))
+            return "N/A", 0.0, {}
+        # expected form: list of {"label": "C", "score": 0.8}, ...
+        if isinstance(data, list) and len(data) > 0:
+            # choose top
+            # build prob_dict
+            prob_dict = {d.get("label", f"lbl_{i}"): float(d.get("score", 0.0)) for i,d in enumerate(data)}
+            # pick top by score
+            top = max(data, key=lambda x: x.get("score",0))
+            label = top.get("label","N/A")
+            confidence = float(top.get("score",0.0))
+            return label, confidence, prob_dict
+        # unknown response
+        return "N/A", 0.0, {}
+    except Exception as e:
+        print("HF Inference API request failed:", e)
+        return "N/A", 0.0, {}
 
 # -------------------------------
-# 🔹 CEFR feedback mapping
-# -------------------------------
-cefr_map = {
-    'C': "Advanced proficiency — The writing demonstrates advanced competence. "
-         "It produces clear, well-structured texts of complex subjects, expanding and supporting points of view "
-         "with examples, reasons, and appropriate conclusions. It effectively varies tone, style, and register "
-         "according to addressee and theme.",
-    'B': "Intermediate proficiency — The writing reflects intermediate proficiency. "
-         "It produces straightforward connected texts on familiar subjects, linking shorter elements into coherent sequences.",
-    'A': "Basic proficiency — The writing shows basic ability to communicate about personal or familiar matters "
-         "using simple words and short, isolated phrases."
-}
-
-# -------------------------------
-# 🔍 Core Analysis
+# Lightweight text metrics
 # -------------------------------
 def truncate_text(text, max_words=500):
     words = text.split()
     return (" ".join(words[:max_words]), True) if len(words) > max_words else (text, False)
 
-def analyze_text(text):
-    matches = check_grammar_api(text)
-    grammar_count = len(matches)
+def compute_ttr(text):
+    words = re.findall(r"\w+", text.lower())
+    if not words:
+        return 0.0
+    unique = len(set(words))
+    return round(unique / len(words), 2)
 
-    # Build detailed issues (limit 10)
-    detailed_issues = []
-    for m in matches[:10]:
-        error_text = text[m["offset"]: m["offset"] + m["length"]]
-        raw_repl = m.get("replacements", [])
-        if raw_repl:
-            # extract string values from dicts
-            repl_strings = []
-            for r in raw_repl[:3]:
-                if isinstance(r, dict):
-                    repl_strings.append(r.get("value", ""))
-                else:
-                    repl_strings.append(str(r))
-            replacements = ", ".join(repl_strings)
-        else:
-            replacements = "No suggestions"
-
-        
-        issue = f"• Issue: {m['message']}\n    Text: \"{error_text}\"\n    Suggestion(s): {replacements}"
-        detailed_issues.append(issue)
-
-    grammar_summary = f"Total Grammar Issues: {grammar_count}\n\n" + "\n\n".join(detailed_issues) \
-        if detailed_issues else "✅ No major grammar issues detected."
-
-    # Highlight text with tooltips
-    highlighted_text = ""
-    last_index = 0
-
-    for m in matches:
-        start, end = m["offset"], m["offset"] + m["length"]
-
-        # Safely escape the tooltip text
-        msg = html.escape(m["message"]).replace("'", "&#39;").replace('"', "&quot;")
-
-        # Add clean text before the error
-        highlighted_text += html.escape(text[last_index:start])
-
-        # Add highlighted span with tooltip
-        highlighted_text += (
-            f"<span class='grammar-issue' title=\"{msg}\">{html.escape(text[start:end])}</span>"
-        )
-
-        last_index = end
-
-    # Add any remaining text
-    highlighted_text += html.escape(text[last_index:])
-
-    # Lexical and readability metrics
-    lex = LexicalRichness(text)
-    ttr = round(lex.ttr, 2)
-    readability = round(textstat.flesch_reading_ease(text), 2)
-
-    # Sentence length
+def avg_sentence_len(text):
     sentences = [s.strip() for s in re.split(r'[.!?]', text) if s.strip()]
-    words = text.split()
-    avg_sentence_length = len(words) / len(sentences) if sentences else 0
-
-    # Sentiment
-    sentiment = TextBlob(text).sentiment.polarity
-
-    return grammar_summary, highlighted_text, ttr, readability, avg_sentence_length, sentiment, grammar_count
+    words = re.findall(r"\w+", text)
+    return (len(words) / len(sentences)) if sentences else 0.0
 
 # -------------------------------
-# 🧠 CEFR prediction (cached for speed if same text repeats)
+# Interpretations & narrative
 # -------------------------------
-@lru_cache(maxsize=128)
-def predict_cefr(text):
-    """
-    Predict CEFR level using Hugging Face Inference API.
-    Returns: label, confidence, probability dict
-    """
-    HF_TOKEN = os.environ["HF_TOKEN"]
-    API_URL = f"https://api-inference.huggingface.co/models/pkim62/CEFR-classification-model"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    payload = {"inputs": text}
+cefr_map = {
+    'C': "Advanced proficiency — well structured, uses varied register.",
+    'B': "Intermediate proficiency — coherent, suitable for familiar topics.",
+    'A': "Basic proficiency — simple sentences and limited range."
+}
 
-    try:
-        response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-        data = response.json()
-
-        # Extract predicted label & scores
-        if isinstance(data, dict) and "error" in data:
-            # model not ready or error
-            return "N/A", 0.0, {}
-        
-        # HF API returns a list of dicts like [{"label": "C", "score": 0.85}, ...]
-        pred = data[0]
-        label = pred["label"]
-        confidence = float(pred["score"])
-        # Build probability dict
-        prob_dict = {d["label"]: float(d["score"]) for d in data}
-        return label, confidence, prob_dict
-
-    except Exception as e:
-        print("HF Inference API error:", e)
-        return "N/A", 0.0, {}
-
-
-# -------------------------------
-# 🧠 Interpretations
-# -------------------------------
 def interpret_readability(score):
-    if score >= 90: return "Very easy to read — ideal for general audiences."
-    if score >= 70: return "Easy to read — clear for most readers."
-    if score >= 50: return "Moderately difficult — suitable for intermediate users."
-    if score >= 30: return "Fairly difficult — may require advanced readers."
-    return "Very difficult — academic or technical in tone."
-
-def interpret_ttr(ttr):
-    if ttr > 0.6: return "High lexical diversity — rich and varied vocabulary."
-    if ttr > 0.4: return "Moderate lexical diversity — balanced word choice."
-    return "Low lexical diversity — vocabulary repetition observed."
+    if score >= 90: return "Very easy to read"
+    if score >= 70: return "Easy to read"
+    if score >= 50: return "Moderately difficult"
+    if score >= 30: return "Fairly difficult"
+    return "Very difficult"
 
 def generate_narrative(predicted_cefr, grammar_count, avg_sentence_length, sentiment, ttr, readability, confidence):
     feedback = []
+    if avg_sentence_length < 10:
+        feedback.append("Sentences are short; consider combining ideas.")
+    elif avg_sentence_length > 25:
+        feedback.append("Sentences are long; consider breaking them for clarity.")
+    else:
+        feedback.append("Sentence length is balanced.")
 
-    # Sentence structure
-    if avg_sentence_length < 10: feedback.append("Sentences are quite short; consider combining ideas for more complexity.")
-    elif avg_sentence_length > 25: feedback.append("Sentences are rather long; consider breaking them for clarity.")
-    else: feedback.append("Sentence length is well-balanced.")
+    if sentiment < -0.2:
+        feedback.append("Tone leans negative.")
+    elif sentiment > 0.2:
+        feedback.append("Tone leans positive.")
+    else:
+        feedback.append("Tone is neutral.")
 
-    # Sentiment
-    if sentiment < -0.2: feedback.append("The tone leans negative.")
-    elif sentiment > 0.2: feedback.append("The tone leans positive.")
-    else: feedback.append("Tone is neutral and balanced.")
+    feedback.append(f"Readability (Flesch {readability}): {interpret_readability(readability)}")
+    feedback.append(f"Lexical Diversity (TTR {ttr}): {'High' if ttr>0.6 else 'Moderate' if ttr>0.4 else 'Low'}")
+    feedback.append(f"Predicted CEFR level: {predicted_cefr} — {cefr_map.get(predicted_cefr,'')}")
 
-    feedback.append(f"**Readability (Flesch Score {readability}):** {interpret_readability(readability)}")
-    feedback.append(f"**Lexical Diversity (TTR {ttr}):** {interpret_ttr(ttr)}")
-    feedback.append(f"**Overall CEFR Level:** {predicted_cefr}\n{cefr_map.get(predicted_cefr,'')}")
-
-    if sentiment < -0.2: sentiment_interpretation = "The text conveys a negative or critical tone."
-    elif sentiment > 0.2: sentiment_interpretation = "The overall tone of your writing is positive and engaging."
-    else: sentiment_interpretation = "The tone appears neutral and balanced."
-
-    summary = (
-        f"This text has {grammar_count} grammar issue(s), "
-        f"a lexical diversity (TTR) of {ttr:.2f}, "
-        f"and a readability score of {readability:.1f}. "
-        f"The average sentence length is {avg_sentence_length:.1f} words. "
-        f"The predicted CEFR level is **{predicted_cefr}**, with a confidence of **{confidence:.2f}**. "
-        f"{sentiment_interpretation}"
-    )
-
+    summary = (f"This text has {grammar_count} grammar issue(s), a TTR of {ttr:.2f}, "
+               f"readability {readability:.1f}, average sentence length {avg_sentence_length:.1f}. "
+               f"CEFR: {predicted_cefr} (confidence {confidence:.2f}).")
     return "\n\n".join(feedback), summary
 
 # -------------------------------
-# 🔹 CEFR probability chart
-# -------------------------------
-def plot_cefr_probs(prob_dict):
-    fig, ax = plt.subplots(figsize=(4,3), dpi=100)
-    ax.bar(prob_dict.keys(), prob_dict.values(), color='cornflowerblue')
-    ax.set_ylim(0,1)
-    ax.set_ylabel("Probability")
-    ax.set_title("CEFR Probability Distribution")
-    plt.tight_layout()
-    fig.canvas.draw()
-    img = np.array(fig.canvas.renderer.buffer_rgba())
-    plt.close(fig)
-    return Image.fromarray(img)
-
-# -------------------------------
-# 🎨 Gradio App
+# Main app logic
 # -------------------------------
 def cefr_feedback_app(text):
+    start = time.time()
     text, truncated = truncate_text(text)
     if not text.strip():
-        return ["N/A"] * 8 + ["No text provided.", None]
+        return ["N/A"]*8 + ["No text provided.", None]
 
-    grammar_summary, highlighted_text, ttr, readability, avg_sentence_length, sentiment, grammar_count = analyze_text(text)
+    matches = check_grammar_api(text)
+    grammar_summary, highlighted_text, grammar_count = build_grammar_summary(text, matches)
+
+    ttr = compute_ttr(text)
+    readability = round(textstat.flesch_reading_ease(text), 2)
+    avg_len = avg_sentence_len(text)
+    sentiment = simple_sentiment(text)
+
     predicted_cefr, confidence, prob_dict = predict_cefr(text)
-    narrative_feedback, summary = generate_narrative(predicted_cefr, grammar_count, avg_sentence_length, sentiment, ttr, readability, confidence)
-    cefr_chart = plot_cefr_probs(prob_dict)
+    narrative_feedback, summary = generate_narrative(predicted_cefr, grammar_count, avg_len, sentiment, ttr, readability, confidence)
 
     if truncated:
         summary += "\n\n⚠️ Note: Only the first 500 words were analyzed."
 
+    # no chart to keep memory low; return None for chart_output
+    elapsed = time.time() - start
+    print(f"Processed request in {elapsed:.2f}s")
     return (
         predicted_cefr, confidence, grammar_summary, highlighted_text,
-        ttr, readability, round(avg_sentence_length,1), f"{sentiment:.2f}",
-        narrative_feedback, summary, cefr_chart
+        ttr, readability, round(avg_len,1), f"{sentiment:.2f}",
+        narrative_feedback, summary, None
     )
 
 # -------------------------------
-# 🔹 Gradio interface
+# Gradio UI (same layout, chart removed)
 # -------------------------------
 custom_css = """
 <style>
@@ -267,7 +224,7 @@ textarea:focus, input:focus { outline: none !important; box-shadow: none !import
 """
 
 with gr.Blocks(theme="gradio/soft", css=custom_css) as app:
-    gr.Markdown("## ✍️ Automated Writing Feedback (with CEFR Classification)")
+    gr.Markdown("## ✍️ Optimized Automated Writing Feedback (CEFR)")
     gr.Markdown("Paste up to 500 words. Grammar issues are highlighted with hover tooltips.")
     text_input = gr.Textbox(lines=10, placeholder="Paste your text here (max 500 words)...", label="Your Text")
     analyze_btn = gr.Button("🔍 Analyze Text")
@@ -287,13 +244,12 @@ with gr.Blocks(theme="gradio/soft", css=custom_css) as app:
 
     narrative_output = gr.Textbox(label="Detailed Narrative Feedback", lines=6, max_lines=10)
     summary_output = gr.Textbox(label="Summary", lines=3, max_lines=6)
-    chart_output = gr.Image(label="CEFR Probability Distribution")
+    chart_output = gr.Image(label="CEFR Probability Distribution")  # will be None, Gradio tolerates None
 
     gr.Markdown("""
     <div class="custom-disclaimer">
     ⚠️ <b>Disclaimer:</b><br>
-    This tool is for <b>demonstration purposes only</b> and should not be used for commercial, official, or
-    high-stakes essay scoring. Feedback is automatically generated and may contain inaccuracies.
+    This tool is for <b>demonstration purposes only</b> and should not be used for high-stakes scoring.
     </div>
     """)
 
@@ -308,20 +264,8 @@ with gr.Blocks(theme="gradio/soft", css=custom_css) as app:
     )
 
 # -------------------------------
-# 🚀 Launch
+# Launch (Render-ready)
 # -------------------------------
 if __name__ == "__main__":
-    import os
-    os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
-
     port = int(os.environ.get("PORT", 7860))
-
-    app.launch(
-        server_name="0.0.0.0",
-        server_port=port,
-        share=False,
-        show_error=True
-    )
-
-
-
+    app.launch(server_name="0.0.0.0", server_port=port, share=False, show_error=True)
