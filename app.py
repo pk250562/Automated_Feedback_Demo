@@ -12,13 +12,10 @@ import textstat
 # -------------------------------
 # Environment & config
 # -------------------------------
-os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"  # disable analytics that sometimes break cloud hosts
+os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"  # disable analytics
 
-MODEL_REPO = "pkim62/CEFR-classification-model"
-tokenizer = AutoTokenizer.from_pretrained(MODEL_REPO, use_fast=False)
-cefr_model = AutoModelForSequenceClassification.from_pretrained(MODEL_REPO).to(device)
-cefr_model.eval()
-id2label = cefr_model.config.id2label
+# Public CEFR model on Hugging Face
+HF_API_URL = "https://api-inference.huggingface.co/models/pkim62/CEFR-classification-model"
 
 LANGUAGETOOL_API_URL = "https://api.languagetool.org/v2/check"
 
@@ -34,9 +31,7 @@ def simple_sentiment(text):
         return 0.0
     pos = sum(1 for w in words if w in POS_WORDS)
     neg = sum(1 for w in words if w in NEG_WORDS)
-    # score in range -1..1
     score = (pos - neg) / max(1, len(words))
-    # scale a little for readability
     return round(score * 5, 2)
 
 # -------------------------------
@@ -69,6 +64,7 @@ def build_grammar_summary(text, matches, max_items=10):
         replacements = ", ".join(repls) if repls else "No suggestions"
         detailed.append(f"• Issue: {m.get('message','')}\n    Text: \"{error_text}\"\n    Suggestion(s): {replacements}")
     summary = f"Total Grammar Issues: {grammar_count}\n\n" + "\n\n".join(detailed) if detailed else "✅ No major grammar issues detected."
+
     # highlighted html
     highlighted = ""
     last_index = 0
@@ -88,33 +84,20 @@ def build_grammar_summary(text, matches, max_items=10):
 # -------------------------------
 @lru_cache(maxsize=256)
 def predict_cefr(text):
-    """
-    Calls HF Inference API. Returns: label (str), confidence (float), prob_dict (dict)
-    Cached to avoid repeated network calls for identical inputs.
-    """
-    if not HF_TOKEN:
-        return "N/A", 0.0, {}
-
     payload = {"inputs": text}
     try:
-        r = requests.post(HF_API_URL, headers=HEADERS, json=payload, timeout=30)
-        print("API RAW:", r.text, flush=True) #debug line
+        r = requests.post(HF_API_URL, json=payload, timeout=30)
+        print("API RAW:", r.text, flush=True)
         data = r.json()
-        # Handle errors or model not ready
         if isinstance(data, dict) and data.get("error"):
             print("HF API error:", data.get("error"))
             return "N/A", 0.0, {}
-        # expected form: list of {"label": "C", "score": 0.8}, ...
         if isinstance(data, list) and len(data) > 0:
-            # choose top
-            # build prob_dict
             prob_dict = {d.get("label", f"lbl_{i}"): float(d.get("score", 0.0)) for i,d in enumerate(data)}
-            # pick top by score
             top = max(data, key=lambda x: x.get("score",0))
             label = top.get("label","N/A")
             confidence = float(top.get("score",0.0))
             return label, confidence, prob_dict
-        # unknown response
         return "N/A", 0.0, {}
     except Exception as e:
         print("HF Inference API request failed:", e)
@@ -131,8 +114,7 @@ def compute_ttr(text):
     words = re.findall(r"\w+", text.lower())
     if not words:
         return 0.0
-    unique = len(set(words))
-    return round(unique / len(words), 2)
+    return round(len(set(words)) / len(words), 2)
 
 def avg_sentence_len(text):
     sentences = [s.strip() for s in re.split(r'[.!?]', text) if s.strip()]
@@ -203,7 +185,6 @@ def cefr_feedback_app(text):
     if truncated:
         summary += "\n\n⚠️ Note: Only the first 500 words were analyzed."
 
-    # no chart to keep memory low; return None for chart_output
     elapsed = time.time() - start
     print(f"Processed request in {elapsed:.2f}s")
     return (
@@ -213,7 +194,7 @@ def cefr_feedback_app(text):
     )
 
 # -------------------------------
-# Gradio UI (same layout, chart removed)
+# Gradio UI
 # -------------------------------
 custom_css = """
 <style>
@@ -245,7 +226,7 @@ with gr.Blocks(theme="gradio/default", css=custom_css) as app:
 
     narrative_output = gr.Textbox(label="Detailed Narrative Feedback", lines=6, max_lines=10)
     summary_output = gr.Textbox(label="Summary", lines=3, max_lines=6)
-    chart_output = gr.Image(label="CEFR Probability Distribution")  # will be None, Gradio tolerates None
+    chart_output = gr.Image(label="CEFR Probability Distribution")  # will be None
 
     gr.Markdown("""
     <div class="custom-disclaimer">
@@ -265,11 +246,20 @@ with gr.Blocks(theme="gradio/default", css=custom_css) as app:
     )
 
 # -------------------------------
-# Launch (Render-ready)
+# Warmup function to reduce cold start latency
+# -------------------------------
+def warmup_cefr_model():
+    dummy_text = "This is a warm-up text to initialize the CEFR model."
+    try:
+        label, conf, _ = predict_cefr(dummy_text)
+        print(f"Warmup complete: label={label}, confidence={conf:.2f}")
+    except Exception as e:
+        print("Warmup failed:", e)
+
+# -------------------------------
+# Launch app
 # -------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
+    warmup_cefr_model()
     app.launch(server_name="0.0.0.0", server_port=port, share=False, show_error=True)
-
-
-
