@@ -10,6 +10,8 @@ import numpy as np
 from functools import lru_cache
 from PIL import Image
 import requests
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
 
 # -------------------------------
 # 🔧 Device
@@ -33,18 +35,43 @@ def check_grammar_api(text):
 # -------------------------------
 # 🔧 Load INT8 CEFR model from local repo (Render)
 # -------------------------------
-MODEL_LOCAL_PATH = "./"  # root of repo where INT8 model files are
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+# Path to the folder containing your model files (model.safetensors, tokenizer.json, etc.)
+MODEL_LOCAL_PATH = "./"  # repo root
 
+# Check if files exist
+required_files = [
+    "model.safetensors",
+    "config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "merges.txt",
+    "vocab.json"
+]
+missing_files = [f for f in required_files if not os.path.isfile(os.path.join(MODEL_LOCAL_PATH, f))]
+if missing_files:
+    raise FileNotFoundError(f"Missing model files in {MODEL_LOCAL_PATH}: {missing_files}")
+
+# Load tokenizer from local files
 tokenizer = AutoTokenizer.from_pretrained(MODEL_LOCAL_PATH, use_fast=False)
+
+# Load INT8 quantized model from local files
 cefr_model = AutoModelForSequenceClassification.from_pretrained(
     MODEL_LOCAL_PATH,
     device_map="auto",
     load_in_8bit=True
 )
+
+# Move model to the selected device
+cefr_model.to(device)
 cefr_model.eval()
+
+# Mapping from prediction index to label
 id2label = cefr_model.config.id2label
+print(f"✅ Loaded INT8 CEFR model from {MODEL_LOCAL_PATH} on device {device}")
+
 
 # -------------------------------
 # 🔹 CEFR feedback mapping
@@ -181,3 +208,4 @@ with gr.Blocks(theme="gradio/soft", css=custom_css) as app:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.launch(server_name="0.0.0.0", server_port=port, share=False)
+
