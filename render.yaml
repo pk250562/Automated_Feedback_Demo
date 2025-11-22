@@ -7,6 +7,4 @@ services:
     branch: main
     buildCommand: pip install -r requirements.txt
     startCommand: python app.py
-    envVars:
-      - key: HF_TOKEN
-        fromSecret: HF_TOKEN
+    # No HF_TOKEN needed, we are loading the model locally
