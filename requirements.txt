@@ -7,4 +7,4 @@ textblob
 matplotlib
 Pillow
 requests
-numpy
+accelerate
