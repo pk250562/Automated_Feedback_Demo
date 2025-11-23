@@ -266,4 +266,12 @@ with gr.Blocks(theme="gradio/soft", css=custom_css, analytics_enabled=False) as 
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 7860))
-    app.launch(server_name="0.0.0.0", server_port=port, show_error=True)
+    app.launch(
+        server_name="0.0.0.0",
+        server_port=port,
+        show_error=True,
+        enable_queue=True,       # optional, helps with multiple requests
+        share=False              # ensure public sharing is off; Render handles traffic
+    )
+
+
