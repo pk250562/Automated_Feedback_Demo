@@ -274,8 +274,8 @@ if __name__ == "__main__":
         server_port=port,
         show_error=True,
         enable_queue=True,
+        inbrowser=False,   # <<< REQUIRED FOR RENDER
         share=False
     )
-
 
 
