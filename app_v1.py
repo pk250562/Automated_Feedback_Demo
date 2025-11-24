@@ -28,30 +28,36 @@ for pkg in nltk_data_needed:
         nltk.download(pkg)
 
 # -------------------------
-# Configuration: Model repo
+# Configuration: Local model path
 # -------------------------
-MODEL_REPO = os.getenv("MODEL_REPO", "pkim62/CEFR-classification-model")
-HF_TOKEN = os.getenv("HF_TOKEN", None)
-device = "cpu"  # Render free tier
+MODEL_LOCAL_PATH = "./"  # root of your GitHub repo with the INT8 model
+device = "cpu"  # Render free tier (CPU only)
 
 # -------------------------
-# Authenticate & load model
+# Load tokenizer and model from local path
 # -------------------------
-if HF_TOKEN:
-    try:
-        login(token=HF_TOKEN)
-    except Exception as e:
-        print("HF login failed:", e)
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-print(f"Loading model from {MODEL_REPO} on device={device} ...")
-tokenizer = AutoTokenizer.from_pretrained(MODEL_REPO, use_fast=False)
-cefr_model = AutoModelForSequenceClassification.from_pretrained(MODEL_REPO, trust_remote_code=False)
+print(f"Loading model from {MODEL_LOCAL_PATH} on device={device} ...")
+
+# Tokenizer
+tokenizer = AutoTokenizer.from_pretrained(MODEL_LOCAL_PATH, use_fast=False)
+
+# Model
+cefr_model = AutoModelForSequenceClassification.from_pretrained(
+    MODEL_LOCAL_PATH,
+    device_map=None,      # CPU only
+    load_in_8bit=False,   # INT8 bitsandbytes not supported on CPU
+    trust_remote_code=False
+)
+
 cefr_model.to(device)
 cefr_model.eval()
 
 # Build id2label safely
 id2label = getattr(cefr_model.config, "id2label", {i: str(i) for i in range(cefr_model.config.num_labels)})
 
+print("Model loaded successfully!")
 # -------------------------
 # Utility functions
 # -------------------------
@@ -277,5 +283,6 @@ if __name__ == "__main__":
         inbrowser=False,   # <<< REQUIRED FOR RENDER
         share=False
     )
+
 
 
